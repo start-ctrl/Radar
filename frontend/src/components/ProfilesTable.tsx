@@ -1,11 +1,40 @@
-import { useState, useEffect } from 'react';
-import { profilesApi, type ProfilesResponse } from '../api/profiles';
+import { useMemo, useState, useEffect } from 'react';
+import {
+  profilesApi,
+  type ProfilesResponse,
+  type EnrichmentField,
+} from '../api/profiles';
 
 export function ProfilesTable() {
   const [data, setData] = useState<ProfilesResponse | null>(null);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedProfiles, setSelectedProfiles] = useState<Record<string, boolean>>({});
+  const [enriching, setEnriching] = useState(false);
+  const [enrichmentError, setEnrichmentError] = useState<string | null>(null);
+  /** Enriched data per profile id – merged into table in place */
+  const [enrichedData, setEnrichedData] = useState<Record<string, Record<string, unknown>>>({});
+  const [lastEnrichmentMeta, setLastEnrichmentMeta] = useState<{ count: number; credits: number | null } | null>(null);
+  const [fields, setFields] = useState<EnrichmentField[]>([
+    'name',
+    'title',
+    'headline',
+    'linkedin_url',
+    'email',
+    'organization',
+  ]);
+
+  const availableFields: { id: EnrichmentField; label: string }[] = [
+    { id: 'name', label: 'Name' },
+    { id: 'title', label: 'Title' },
+    { id: 'headline', label: 'Headline' },
+    { id: 'linkedin_url', label: 'LinkedIn URL' },
+    { id: 'email', label: 'Email (credit-sensitive)' },
+    { id: 'organization', label: 'Organization' },
+    { id: 'location', label: 'Location' },
+    { id: 'employment_history', label: 'Employment History' },
+  ];
 
   useEffect(() => {
     loadProfiles();
@@ -27,6 +56,91 @@ export function ProfilesTable() {
       setError(result.error || 'Failed to load');
     }
     setLoading(false);
+  };
+
+  const selectedIds = useMemo(
+    () => Object.entries(selectedProfiles).filter(([, v]) => v).map(([k]) => k),
+    [selectedProfiles]
+  );
+
+  const toggleField = (field: EnrichmentField) => {
+    setFields((prev) => {
+      if (prev.includes(field)) {
+        const next = prev.filter((f) => f !== field);
+        return next.length ? next : prev;
+      }
+      return [...prev, field];
+    });
+  };
+
+  const toggleRow = (id: string) => {
+    setSelectedProfiles((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const toggleAllVisible = () => {
+    if (!data) return;
+    const visible = data.profiles.map((p) => p.id);
+    const allSelected = visible.every((id) => selectedProfiles[id]);
+    const updates: Record<string, boolean> = {};
+    visible.forEach((id) => {
+      updates[id] = !allSelected;
+    });
+    setSelectedProfiles((prev) => ({ ...prev, ...updates }));
+  };
+
+  const runEnrichment = async () => {
+    setEnrichmentError(null);
+    setLastEnrichmentMeta(null);
+    if (!selectedIds.length) {
+      setEnrichmentError('Select at least one profile.');
+      return;
+    }
+    if (selectedIds.length > 10) {
+      setEnrichmentError('Select up to 10 profiles at a time to control credits.');
+      return;
+    }
+    setEnriching(true);
+    try {
+      const result = await profilesApi.enrich({
+        profile_ids: selectedIds,
+        fields,
+        strategy: 'auto',
+      });
+      if (result.data) {
+        const enrichmentData = result.data;
+        setEnrichedData((prev) => {
+          const next = { ...prev };
+          enrichmentData.results.forEach((r) => {
+            next[r.profile_id] = r.data;
+          });
+          return next;
+        });
+        setLastEnrichmentMeta({
+          count: enrichmentData.enriched,
+          credits: enrichmentData.credits_consumed ?? null,
+        });
+      } else {
+        setEnrichmentError(result.error || 'Failed to enrich profiles');
+      }
+    } catch (error) {
+      setEnrichmentError('An unexpected error occurred during enrichment');
+    }
+    setEnriching(false);
+  };
+
+  const toDisplayString = (value: unknown): string => {
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    return '';
+  };
+
+  const getOrganizationDisplay = (value: unknown): string => {
+    if (typeof value === 'string') return value;
+    if (value && typeof value === 'object') {
+      const maybeName = (value as Record<string, unknown>).name;
+      return toDisplayString(maybeName);
+    }
+    return '';
   };
 
   if (loading && !data) {
@@ -71,7 +185,56 @@ export function ProfilesTable() {
   const totalPages = Math.ceil(data.total / data.page_size);
 
   return (
-    <div className="card overflow-hidden">
+    <div className="space-y-4">
+      <div className="card p-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <p className="text-sm font-medium text-[var(--text-primary)]">Enrichment Controls</p>
+            <p className="text-xs text-[var(--text-muted)] mt-1">
+              People Search gives profile names at 0 credits. Enrichment is optional and credit-consuming.
+            </p>
+          </div>
+          <button
+            onClick={runEnrichment}
+            disabled={enriching || selectedIds.length === 0}
+            className="btn btn-primary py-2 px-4 text-sm disabled:opacity-50"
+          >
+            {enriching ? 'Enriching...' : `Enrich Selected (${selectedIds.length})`}
+          </button>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {availableFields.map((field) => {
+            const selected = fields.includes(field.id);
+            return (
+              <button
+                key={field.id}
+                type="button"
+                onClick={() => toggleField(field.id)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  selected
+                    ? 'bg-[var(--accent-purple)] text-white'
+                    : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
+                }`}
+              >
+                {field.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {enrichmentError && (
+          <p className="mt-3 text-sm text-red-500">{enrichmentError}</p>
+        )}
+        {lastEnrichmentMeta && (
+          <p className="mt-3 text-sm text-green-600 dark:text-green-400">
+            Enriched {lastEnrichmentMeta.count} profile{lastEnrichmentMeta.count !== 1 ? 's' : ''}
+            {lastEnrichmentMeta.credits != null ? ` (${lastEnrichmentMeta.credits} credits)` : ''}. Data is shown in the table below.
+          </p>
+        )}
+      </div>
+
+      <div className="card overflow-hidden">
       <div className="px-6 py-4 border-b border-[var(--border-color)] flex items-center justify-between">
         <div>
           <h3 className="text-sm font-medium text-[var(--text-primary)]">Tracked Profiles</h3>
@@ -85,33 +248,94 @@ export function ProfilesTable() {
         </button>
       </div>
 
-      <table>
+      <div className="profiles-table-wrapper">
+      <table className="profiles-table">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Title</th>
-            <th>Company</th>
-            <th>Location</th>
+            <th className="col-checkbox">
+              <input
+                type="checkbox"
+                onChange={toggleAllVisible}
+                checked={data.profiles.length > 0 && data.profiles.every((p) => selectedProfiles[p.id])}
+              />
+            </th>
+            <th className="col-name">Name</th>
+            <th className="col-title">Title</th>
+            <th className="col-company">Company</th>
+            <th className="col-location">Location</th>
+            <th className="col-email">Email</th>
+            <th className="col-linkedin">LinkedIn</th>
+            <th className="col-headline">Headline</th>
           </tr>
         </thead>
         <tbody>
-          {data.profiles.map((profile) => (
-            <tr key={profile.id}>
-              <td>
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-full bg-[var(--accent-purple-light)] flex items-center justify-center text-xs font-medium text-[var(--accent-purple)]">
-                    {profile.full_name.split(' ').map(n => n[0]).join('').slice(0, 2)}
+          {data.profiles.map((profile) => {
+            const enriched = enrichedData[profile.id];
+            const name = toDisplayString(enriched?.name) || profile.full_name;
+            const title = toDisplayString(enriched?.title) || profile.current_title || '—';
+            const company = getOrganizationDisplay(enriched?.organization) || profile.current_company || '—';
+            const locationVal = enriched?.location;
+            let locationStr = profile.location_state || '—';
+            if (locationVal) {
+              if (typeof locationVal === 'string') {
+                locationStr = locationVal;
+              } else if (typeof locationVal === 'object' && locationVal !== null) {
+                const locObj = locationVal as Record<string, unknown>;
+                const parts = [
+                  toDisplayString(locObj.city),
+                  toDisplayString(locObj.state),
+                  toDisplayString(locObj.country),
+                ].filter(Boolean);
+                if (parts.length > 0) {
+                  locationStr = parts.join(', ');
+                }
+              }
+            }
+            const email = toDisplayString(enriched?.email) || '—';
+            const linkedinUrl = toDisplayString(enriched?.linkedin_url);
+            const headline = toDisplayString(enriched?.headline) || '—';
+            return (
+              <tr key={profile.id}>
+                <td className="col-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={!!selectedProfiles[profile.id]}
+                    onChange={() => toggleRow(profile.id)}
+                  />
+                </td>
+                <td className="col-name">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-full bg-[var(--accent-purple-light)] flex items-center justify-center text-xs font-medium text-[var(--accent-purple)]">
+                      {name ? name.split(' ').map((n) => n[0]).join('').slice(0, 2) : '?'}
+                    </div>
+                    <span className="font-medium text-[var(--text-primary)]">{name}</span>
                   </div>
-                  <span className="font-medium text-[var(--text-primary)]">{profile.full_name}</span>
-                </div>
-              </td>
-              <td>{profile.current_title || '—'}</td>
-              <td>{profile.current_company || '—'}</td>
-              <td>{profile.location_state || '—'}</td>
-            </tr>
-          ))}
+                </td>
+                <td className="col-title">{title}</td>
+                <td className="col-company">{company}</td>
+                <td className="col-location">{locationStr}</td>
+                <td className="col-email">{email}</td>
+                <td className="col-linkedin">
+                  {linkedinUrl ? (
+                    <a
+                      href={linkedinUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[var(--accent-purple)] hover:underline text-sm"
+                    >
+                      View
+                    </a>
+                  ) : (
+                    '—'
+                  )}
+                </td>
+                <td className="col-headline">{headline}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
+      </div>
 
       {totalPages > 1 && (
         <div className="px-6 py-3 border-t border-[var(--border-color)] flex items-center justify-between bg-[var(--bg-secondary)]">
@@ -134,6 +358,7 @@ export function ProfilesTable() {
           </button>
         </div>
       )}
+      </div>
     </div>
   );
 }

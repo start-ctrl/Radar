@@ -292,6 +292,41 @@ tr:last-child td {
   border-bottom: none;
 }
 
+/* Profiles table: larger and clearer */
+.profiles-table-wrapper {
+  overflow-x: auto;
+  width: 100%;
+}
+
+.profiles-table {
+  min-width: 1600px;
+  width: 100%;
+}
+
+.profiles-table th,
+.profiles-table td {
+  padding: 1rem 1.5rem;
+  font-size: 1rem;
+}
+
+.profiles-table th {
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.profiles-table td {
+  vertical-align: top;
+}
+
+.profiles-table .col-checkbox { width: 3rem; min-width: 3rem; }
+.profiles-table .col-name { min-width: 220px; }
+.profiles-table .col-title { min-width: 200px; }
+.profiles-table .col-company { min-width: 200px; }
+.profiles-table .col-location { min-width: 180px; }
+.profiles-table .col-email { min-width: 280px; }
+.profiles-table .col-linkedin { min-width: 120px; }
+.profiles-table .col-headline { min-width: 400px; max-width: 500px; white-space: normal; word-break: break-word; }
+
 /* Badge styles */
 .badge {
   display: inline-flex;

@@ -1,11 +1,17 @@
 """Profile-related API endpoints."""
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Dict, Any
 from app.database import get_db
 from app.auth import verify_credentials
 from app.models import Profile
-from app.schemas.profile import ProfileResponse, ProfileListResponse
+from app.schemas.profile import (
+    ProfileResponse,
+    ProfileListResponse,
+    EnrichProfilesRequest,
+    EnrichProfilesResponse,
+    EnrichedProfileResponse,
+)
 from app.services.ingestion.factory import get_provider
 from app.services.filters.profile_filter import ProfileFilter
 from app.models import TrackingMetadata, Education, WorkHistory, FounderEvent
@@ -13,6 +19,21 @@ from datetime import datetime
 
 
 router = APIRouter()
+
+ALLOWED_ENRICH_FIELDS = {
+    "name",
+    "title",
+    "headline",
+    "email",
+    "linkedin_url",
+    "twitter_url",
+    "github_url",
+    "facebook_url",
+    "photo_url",
+    "location",
+    "organization",
+    "employment_history",
+}
 
 
 @router.get("/profiles", response_model=ProfileListResponse)
@@ -181,6 +202,96 @@ async def trigger_ingestion(
     }
 
 
+@router.post("/profiles/enrich", response_model=EnrichProfilesResponse)
+async def enrich_profiles(
+    request: EnrichProfilesRequest,
+    db: Session = Depends(get_db),
+    username: str = Depends(verify_credentials),
+):
+    """
+    Enrich selected profiles from Apollo.
+    Uses People Enrichment for single profile and Bulk Enrichment for multiple profiles.
+    """
+    # Validate requested fields
+    invalid = [f for f in request.fields if f not in ALLOWED_ENRICH_FIELDS]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid fields: {invalid}. Allowed: {sorted(ALLOWED_ENRICH_FIELDS)}",
+        )
+
+    profiles = (
+        db.query(Profile)
+        .filter(Profile.id.in_(request.profile_ids))
+        .all()
+    )
+    if not profiles:
+        raise HTTPException(status_code=404, detail="No profiles found for given IDs.")
+
+    profile_by_external = {p.external_id: p for p in profiles if p.external_id}
+    if not profile_by_external:
+        raise HTTPException(status_code=400, detail="Selected profiles are missing external IDs.")
+
+    # Use API provider (must be Apollo)
+    try:
+        provider = get_provider()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not hasattr(provider, "enrich_person_by_id") or not hasattr(provider, "bulk_enrich"):
+        raise HTTPException(
+            status_code=400,
+            detail="Selected provider does not support enrichment. Set PEOPLE_DATA_PROVIDER=apollo.",
+        )
+
+    external_ids = list(profile_by_external.keys())
+    reveal_email = "email" in request.fields
+
+    # Strategy selection
+    strategy = request.strategy
+    if strategy == "auto":
+        strategy = "single" if len(external_ids) == 1 else "bulk"
+    if strategy == "single" and len(external_ids) != 1:
+        raise HTTPException(status_code=400, detail="Single strategy supports exactly one profile.")
+
+    try:
+        if strategy == "single":
+            raw = await provider.enrich_person_by_id(
+                external_ids[0],
+                reveal_personal_emails=reveal_email,
+            )
+            person = raw.get("person") or {}
+            profile = profile_by_external.get(external_ids[0])
+            normalized = [_normalize_enriched_person(profile, person, request.fields, "people_enrichment")]
+            credits_consumed = raw.get("credits_consumed")
+            method = "people_enrichment"
+        else:
+            raw = await provider.bulk_enrich(
+                external_ids,
+                reveal_personal_emails=reveal_email,
+            )
+            matches = raw.get("matches") or []
+            normalized = []
+            for match in matches:
+                ext_id = str(match.get("id") or "").strip()
+                profile = profile_by_external.get(ext_id)
+                if profile:
+                    normalized.append(_normalize_enriched_person(profile, match, request.fields, "bulk_enrichment"))
+            credits_consumed = raw.get("credits_consumed")
+            method = "bulk_enrichment"
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Enrichment failed: {str(e)}")
+
+    return EnrichProfilesResponse(
+        requested=len(external_ids),
+        enriched=len(normalized),
+        method=method,
+        credits_consumed=credits_consumed,
+        results=normalized,
+    )
+
+
 def _store_profile(db: Session, profile_data):
     """Store or update a profile. Does not commit; caller must commit once after all profiles."""
     profile = db.query(Profile).filter(
@@ -228,4 +339,49 @@ def _store_profile(db: Session, profile_data):
             is_current=work_data.is_current,
             snapshot_date=snapshot_date,
         ))
+
+
+def _normalize_enriched_person(
+    profile: Profile,
+    person: Dict[str, Any],
+    fields: List[str],
+    method: str,
+) -> EnrichedProfileResponse:
+    data: Dict[str, Any] = {}
+
+    if "name" in fields:
+        data["name"] = person.get("name")
+    if "title" in fields:
+        data["title"] = person.get("title")
+    if "headline" in fields:
+        data["headline"] = person.get("headline")
+    if "email" in fields:
+        data["email"] = person.get("email")
+    if "linkedin_url" in fields:
+        data["linkedin_url"] = person.get("linkedin_url")
+    if "twitter_url" in fields:
+        data["twitter_url"] = person.get("twitter_url")
+    if "github_url" in fields:
+        data["github_url"] = person.get("github_url")
+    if "facebook_url" in fields:
+        data["facebook_url"] = person.get("facebook_url")
+    if "photo_url" in fields:
+        data["photo_url"] = person.get("photo_url")
+    if "location" in fields:
+        data["location"] = {
+            "city": person.get("city"),
+            "state": person.get("state"),
+            "country": person.get("country"),
+        }
+    if "organization" in fields:
+        data["organization"] = person.get("organization")
+    if "employment_history" in fields:
+        data["employment_history"] = person.get("employment_history")
+
+    return EnrichedProfileResponse(
+        profile_id=profile.id,
+        external_id=profile.external_id,
+        method=method,
+        data=data,
+    )
 

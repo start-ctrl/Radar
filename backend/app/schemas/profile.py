@@ -1,6 +1,6 @@
 """Profile-related Pydantic schemas."""
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime, date
 
 
@@ -55,4 +55,30 @@ class ProfileListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class EnrichProfilesRequest(BaseModel):
+    """Request schema for enriching selected profiles."""
+    profile_ids: List[str] = Field(..., min_length=1, max_length=10)
+    # UI-selected fields to return in response
+    fields: List[str] = Field(default_factory=lambda: ["name", "title", "linkedin_url"])
+    # auto: 1 => people enrichment, >1 => bulk enrichment
+    strategy: Literal["auto", "single", "bulk"] = "auto"
+
+
+class EnrichedProfileResponse(BaseModel):
+    """Normalized enriched profile payload returned to frontend."""
+    profile_id: str
+    external_id: str
+    method: Literal["people_enrichment", "bulk_enrichment"]
+    data: Dict[str, Any]
+
+
+class EnrichProfilesResponse(BaseModel):
+    """Enrichment response for selected profiles."""
+    requested: int
+    enriched: int
+    method: Literal["people_enrichment", "bulk_enrichment"]
+    credits_consumed: Optional[int] = None
+    results: List[EnrichedProfileResponse]
 

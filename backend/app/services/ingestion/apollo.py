@@ -1,7 +1,7 @@
 """Apollo.io API implementation."""
 import httpx
 import asyncio
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from app.services.ingestion.base import PeopleDataProvider
 from app.schemas.profile import ProfileData, EducationData, WorkHistoryData
 from app.config import settings
@@ -192,12 +192,44 @@ class ApolloProvider(PeopleDataProvider):
                 raise ValueError(f"Invalid profile data for ID: {profile_id}")
             
             return profile
+
+    async def enrich_person_by_id(
+        self,
+        apollo_id: str,
+        reveal_personal_emails: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Enrich a single person via Apollo People Enrichment API.
+        Consumes credits.
+        """
+        params = {
+            "id": apollo_id,
+            "reveal_personal_emails": str(reveal_personal_emails).lower(),
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "X-Api-Key": self.api_key,
+            "Cache-Control": "no-cache",
+        }
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{self.BASE_URL}/people/match",
+                params=params,
+                headers=headers,
+            )
+            if response.status_code == 401:
+                raise ValueError("Invalid or expired Apollo API key.")
+            if response.status_code == 403:
+                err = response.json() if "application/json" in response.headers.get("content-type", "") else {}
+                raise ValueError(err.get("error", response.text))
+            response.raise_for_status()
+            return response.json()
     
     async def bulk_enrich(
         self,
         apollo_ids: List[str],
-        reveal_personal_emails: bool = True,
-    ) -> Dict:
+        reveal_personal_emails: bool = False,
+    ) -> Dict[str, Any]:
         """
         Bulk enrich up to 10 people via Apollo Bulk People Enrichment API.
         Consumes credits. Use Apollo IDs for best match rate.
