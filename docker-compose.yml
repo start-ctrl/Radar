@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: radar-backend
+    environment:
+      - DATABASE_URL=sqlite:///./data/founder_tracker.db
+      - APOLLO_API_KEY=${APOLLO_API_KEY}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - BASIC_AUTH_USERNAME=${BASIC_AUTH_USERNAME:-admin}
+      - BASIC_AUTH_PASSWORD=${BASIC_AUTH_PASSWORD:-changeme}
+      - EMAIL_FROM=${EMAIL_FROM:-notifications@yourdomain.com}
+      - EMAIL_TO=${EMAIL_TO:-admin@yourdomain.com}
+      - PEOPLE_DATA_PROVIDER=apollo
+      - NOTIFICATION_PROVIDER=resend
+    volumes:
+      - backend_data:/app/data
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build: ./frontend
+    container_name: radar-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  backend_data:
+    driver: local
