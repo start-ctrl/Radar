@@ -62,6 +62,7 @@ async def run_ingestion_job():
         
         target_companies = config.target_companies or []
         target_states = config.target_states or []
+        search_filters = config.search_filters or {}
         
         if not target_companies or not target_states:
             print("Target companies or states not configured. Skipping ingestion.")
@@ -79,28 +80,36 @@ async def run_ingestion_job():
         for company in target_companies:
             try:
                 print(f"Fetching profiles for company: {company}")
-                profiles = await provider.search_by_company(
-                    company,
-                    filters={"state": target_states[0] if target_states else None}
-                )
+                filters = {"states": target_states, **search_filters}
+                profiles = await provider.search_by_company(company, filters=filters)
                 all_profiles.extend(profiles)
+            except ValueError as e:
+                print(f"Apollo config/API error for {company}: {e}")
+                continue
             except Exception as e:
                 print(f"Error fetching profiles for {company}: {e}")
                 continue
-        
-        # Filter profiles
-        filtered_profiles = profile_filter.filter(all_profiles)
+
+        # Dedupe by external_id (same person can appear for multiple companies)
+        seen_ids = set()
+        unique_profiles = []
+        for p in all_profiles:
+            if p.external_id and p.external_id not in seen_ids:
+                seen_ids.add(p.external_id)
+                unique_profiles.append(p)
+
+        filtered_profiles = profile_filter.filter(unique_profiles)
         print(f"Filtered {len(filtered_profiles)} profiles from {len(all_profiles)} total")
-        
-        # Store or update profiles
-        for profile_data in filtered_profiles:
-            _store_profile(db, profile_data)
-        
-        # Update last ingestion timestamp
-        config.last_ingestion = datetime.now()
-        db.commit()
-        
-        print(f"[{datetime.now()}] Ingestion job completed. Processed {len(filtered_profiles)} profiles.")
+
+        try:
+            for profile_data in filtered_profiles:
+                _store_profile(db, profile_data)
+            config.last_ingestion = datetime.now()
+            db.commit()
+            print(f"[{datetime.now()}] Ingestion job completed. Processed {len(filtered_profiles)} profiles.")
+        except Exception as e:
+            db.rollback()
+            print(f"Error saving profiles: {e}")
     
     except Exception as e:
         print(f"Error in ingestion job: {e}")
@@ -155,20 +164,12 @@ async def run_detection_job():
 
 
 def _store_profile(db: Session, profile_data: ProfileData):
-    """
-    Store or update a profile in the database.
-    
-    Args:
-        db: Database session
-        profile_data: Profile data to store
-    """
-    # Check if profile exists
+    """Store or update a profile. Caller must commit once after all profiles."""
     profile = db.query(Profile).filter(
         Profile.external_id == profile_data.external_id
     ).first()
-    
+
     if not profile:
-        # Create new profile
         profile = Profile(
             external_id=profile_data.external_id,
             full_name=profile_data.full_name,
@@ -177,38 +178,30 @@ def _store_profile(db: Session, profile_data: ProfileData):
             location_state=profile_data.location_state,
         )
         db.add(profile)
-        db.flush()  # Get profile ID
-    
+        db.flush()
     else:
-        # Update existing profile
         profile.full_name = profile_data.full_name
         profile.current_title = profile_data.current_title
         profile.current_company = profile_data.current_company
         profile.location_state = profile_data.location_state
-    
-    # Store education
+
     for edu_data in profile_data.education:
-        # Check if education already exists
         existing_edu = db.query(Education).filter(
             Education.profile_id == profile.id,
             Education.institution == edu_data.institution,
             Education.graduation_year == edu_data.graduation_year
         ).first()
-        
         if not existing_edu:
-            edu = Education(
+            db.add(Education(
                 profile_id=profile.id,
                 institution=edu_data.institution,
                 graduation_year=edu_data.graduation_year,
                 degree_type=edu_data.degree_type,
-            )
-            db.add(edu)
-    
-    # Store work history snapshot
+            ))
+
     snapshot_date = datetime.now()
     for work_data in profile_data.work_history:
-        # Create snapshot entry
-        work = WorkHistory(
+        db.add(WorkHistory(
             profile_id=profile.id,
             title=work_data.title,
             company=work_data.company,
@@ -216,8 +209,5 @@ def _store_profile(db: Session, profile_data: ProfileData):
             end_date=work_data.end_date,
             is_current=work_data.is_current,
             snapshot_date=snapshot_date,
-        )
-        db.add(work)
-    
-    db.commit()
+        ))
 

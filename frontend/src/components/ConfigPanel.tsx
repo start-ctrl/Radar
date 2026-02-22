@@ -1,15 +1,18 @@
 import { useState, useEffect } from 'react';
-import { configApi, type Config } from '../api/config';
+import { configApi, type Config, type SearchFilters } from '../api/config';
 
 interface ConfigPanelProps {
-  section: 'companies' | 'locations' | 'notifications';
+  section: 'companies' | 'locations' | 'filters' | 'notifications';
 }
 
 export function ConfigPanel({ section }: ConfigPanelProps) {
   const [config, setConfig] = useState<Config | null>(null);
   const [companies, setCompanies] = useState<string>('');
   const [states, setStates] = useState<string>('');
-  const [loading, setLoading] = useState<'companies' | 'states' | null>(null);
+  const [personTitles, setPersonTitles] = useState<string>('');
+  const [orgLocations, setOrgLocations] = useState<string>('');
+  const [perPage, setPerPage] = useState<number>(100);
+  const [loading, setLoading] = useState<'companies' | 'states' | 'filters' | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
@@ -29,6 +32,12 @@ export function ConfigPanel({ section }: ConfigPanelProps) {
       setConfig(result.data);
       setCompanies(result.data.target_companies.join('\n'));
       setStates(result.data.target_states.join(', '));
+      
+      // Load search filters
+      const filters = result.data.search_filters || {};
+      setPersonTitles((filters.person_titles || []).join('\n'));
+      setOrgLocations((filters.organization_locations || []).join('\n'));
+      setPerPage(filters.per_page || 100);
     } else {
       setMessage({ type: 'error', text: result.error || 'Failed to load config' });
     }
@@ -57,6 +66,28 @@ export function ConfigPanel({ section }: ConfigPanelProps) {
       setMessage({ type: 'error', text: result.error });
     } else {
       setMessage({ type: 'success', text: `Successfully saved ${stateList.length} states` });
+      loadConfig();
+    }
+    setLoading(null);
+  };
+
+  const handleSaveFilters = async () => {
+    setLoading('filters');
+    setMessage(null);
+    
+    const titlesList = personTitles.split('\n').filter(t => t.trim()).map(t => t.trim());
+    const locationsList = orgLocations.split('\n').filter(l => l.trim()).map(l => l.trim());
+    
+    const filters: SearchFilters = {};
+    if (titlesList.length > 0) filters.person_titles = titlesList;
+    if (locationsList.length > 0) filters.organization_locations = locationsList;
+    if (perPage !== 100) filters.per_page = perPage;
+    
+    const result = await configApi.updateSearchFilters(filters);
+    if (result.error) {
+      setMessage({ type: 'error', text: result.error });
+    } else {
+      setMessage({ type: 'success', text: 'Search filters updated successfully' });
       loadConfig();
     }
     setLoading(null);
@@ -222,6 +253,117 @@ export function ConfigPanel({ section }: ConfigPanelProps) {
                 </>
               )}
             </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (section === 'filters') {
+    return (
+      <div>
+        <div className="section-header">
+          <h1 className="section-title text-xl">Apollo Search Filters</h1>
+          <p className="section-description">Configure additional filters for the Apollo People API Search</p>
+        </div>
+
+        {message && (
+          <div className={`alert mb-6 ${message.type === 'success' ? 'alert-success' : 'alert-error'}`}>
+            {message.type === 'success' ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            )}
+            <span>{message.text}</span>
+          </div>
+        )}
+
+        <div className="space-y-6">
+          {/* Person Titles */}
+          <div className="card p-6">
+            <div className="form-group">
+              <label className="form-label">Job Titles (Optional)</label>
+              <textarea
+                value={personTitles}
+                onChange={(e) => setPersonTitles(e.target.value)}
+                placeholder="Enter one job title per line&#10;&#10;Example:&#10;sales director&#10;director sales&#10;director, sales&#10;VP of Engineering"
+                rows={8}
+              />
+              <p className="form-hint">
+                Filter people by specific job titles. Leave empty to include all titles. One title per line.
+              </p>
+            </div>
+          </div>
+
+          {/* Organization Locations */}
+          <div className="card p-6">
+            <div className="form-group">
+              <label className="form-label">Organization Locations (Optional)</label>
+              <textarea
+                value={orgLocations}
+                onChange={(e) => setOrgLocations(e.target.value)}
+                placeholder="Enter one location per line&#10;&#10;Example:&#10;California, US&#10;New York, US&#10;Texas, US"
+                rows={6}
+              />
+              <p className="form-hint">
+                Filter by company headquarters location (not personal location). One location per line in format "State, Country".
+              </p>
+            </div>
+          </div>
+
+          {/* Results Per Page */}
+          <div className="card p-6">
+            <div className="form-group">
+              <label className="form-label">Results Per Page</label>
+              <input
+                type="number"
+                value={perPage}
+                onChange={(e) => setPerPage(Math.min(100, Math.max(1, parseInt(e.target.value) || 100)))}
+                min={1}
+                max={100}
+              />
+              <p className="form-hint">
+                Number of results to fetch per page (1-100). Default is 100. Higher values = fewer API calls but longer response times.
+              </p>
+            </div>
+          </div>
+
+          {/* Save Button */}
+          <div className="card p-6 bg-[var(--bg-secondary)]">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-[var(--text-primary)]">Search Filters</p>
+                <p className="text-xs text-[var(--text-muted)] mt-1">
+                  These filters are optional and work together with target companies and locations.
+                </p>
+              </div>
+              <button
+                onClick={handleSaveFilters}
+                disabled={loading !== null}
+                className="btn btn-primary"
+              >
+                {loading === 'filters' ? (
+                  <>
+                    <svg className="w-4 h-4 spinner" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Save Filters
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </div>

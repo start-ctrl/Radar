@@ -1,5 +1,6 @@
 /** API client for backend communication. */
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// Use relative URL in dev (Vite proxies /api to backend); override with VITE_API_URL for production
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 // Basic auth credentials (in production, use proper auth flow)
 const getAuthHeader = (): string => {

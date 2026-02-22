@@ -15,6 +15,9 @@ class TrackingMetadata(Base):
     target_companies = Column(JSON, nullable=False, default=list)  # List of company names
     target_states = Column(JSON, nullable=False, default=list)  # List of US state codes
     
+    # Apollo search filters - optional additional search parameters
+    search_filters = Column(JSON, nullable=True, default=dict)  # Dict of optional Apollo filters
+    
     # Last run timestamps
     last_ingestion = Column(DateTime(timezone=True), nullable=True)
     last_detection = Column(DateTime(timezone=True), nullable=True)

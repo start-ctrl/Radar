@@ -8,7 +8,7 @@ from app.models import Profile
 from app.schemas.profile import ProfileResponse, ProfileListResponse
 from app.services.ingestion.factory import get_provider
 from app.services.filters.profile_filter import ProfileFilter
-from app.models import TrackingMetadata, Education, WorkHistory
+from app.models import TrackingMetadata, Education, WorkHistory, FounderEvent
 from datetime import datetime
 
 
@@ -56,23 +56,50 @@ async def list_profiles(
     )
 
 
+@router.post("/profiles/clear")
+async def clear_profiles(
+    db: Session = Depends(get_db),
+    username: str = Depends(verify_credentials),
+):
+    """
+    Clear all profiles and related data (education, work history, founder events).
+    Use this to remove mock/old data before syncing fresh Apollo data.
+    """
+    # Delete in order: founder_events, education, work_history, profiles
+    db.query(FounderEvent).delete()
+    db.query(Education).delete()
+    db.query(WorkHistory).delete()
+    deleted = db.query(Profile).delete()
+    db.commit()
+    return {"message": "Profiles cleared", "deleted": deleted}
+
+
 @router.post("/profiles/ingest")
 async def trigger_ingestion(
+    clear_first: bool = Query(False, description="Clear existing profiles before syncing (removes mock/old data)"),
     db: Session = Depends(get_db),
     username: str = Depends(verify_credentials),
 ):
     """
     Manually trigger profile ingestion.
     
-    Fetches profiles from external API based on configured companies and states.
+    Fetches profiles from external API (Apollo) based on configured companies and states.
     
     Args:
+        clear_first: If True, clears all existing profiles before syncing (use to replace mock data)
         db: Database session
         username: Authenticated username
         
     Returns:
         Success message with count of ingested profiles
     """
+    if clear_first:
+        db.query(FounderEvent).delete()
+        db.query(Education).delete()
+        db.query(WorkHistory).delete()
+        db.query(Profile).delete()
+        db.commit()
+
     # Get tracking configuration
     config = db.query(TrackingMetadata).first()
     if not config:
@@ -83,6 +110,7 @@ async def trigger_ingestion(
     
     target_companies = config.target_companies or []
     target_states = config.target_states or []
+    search_filters = config.search_filters or {}
     
     if not target_companies or not target_states:
         raise HTTPException(
@@ -95,8 +123,8 @@ async def trigger_ingestion(
         provider = get_provider()
     except ValueError as e:
         raise HTTPException(
-            status_code=500,
-            detail=f"API provider configuration error: {str(e)}. Please check your .env file."
+            status_code=400,
+            detail=str(e) if "APOLLO_API_KEY" in str(e) or "API key" in str(e) else f"Configuration error: {e}. Set APOLLO_API_KEY in .env for Apollo, or PEOPLE_DATA_PROVIDER=mock to test."
         )
     
     profile_filter = ProfileFilter(
@@ -104,31 +132,47 @@ async def trigger_ingestion(
         target_states=target_states
     )
     
-    # Fetch and filter profiles
+    # Fetch profiles (one request per company)
     all_profiles = []
     for company in target_companies:
         try:
-            profiles = await provider.search_by_company(
-                company,
-                filters={"state": target_states[0] if target_states else None}
-            )
+            filters = {
+                "states": target_states,
+                **search_filters
+            }
+            profiles = await provider.search_by_company(company, filters=filters)
             all_profiles.extend(profiles)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             raise HTTPException(
                 status_code=500,
                 detail=f"Error fetching profiles for {company}: {str(e)}"
             )
-    
-    filtered_profiles = profile_filter.filter(all_profiles)
-    
-    # Store profiles
-    for profile_data in filtered_profiles:
-        _store_profile(db, profile_data)
-    
-    # Update last ingestion timestamp
-    config.last_ingestion = datetime.now()
-    db.commit()
-    
+
+    # Dedupe by external_id (same person can appear for multiple companies)
+    seen_ids = set()
+    unique_profiles = []
+    for p in all_profiles:
+        if p.external_id and p.external_id not in seen_ids:
+            seen_ids.add(p.external_id)
+            unique_profiles.append(p)
+
+    filtered_profiles = profile_filter.filter(unique_profiles)
+
+    # Store all profiles in one transaction
+    try:
+        for profile_data in filtered_profiles:
+            _store_profile(db, profile_data)
+        config.last_ingestion = datetime.now()
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error saving profiles: {str(e)}"
+        )
+
     return {
         "message": "Ingestion completed",
         "total_fetched": len(all_profiles),
@@ -138,14 +182,12 @@ async def trigger_ingestion(
 
 
 def _store_profile(db: Session, profile_data):
-    """Store or update a profile in the database."""
-    # Check if profile exists
+    """Store or update a profile. Does not commit; caller must commit once after all profiles."""
     profile = db.query(Profile).filter(
         Profile.external_id == profile_data.external_id
     ).first()
-    
+
     if not profile:
-        # Create new profile
         profile = Profile(
             external_id=profile_data.external_id,
             full_name=profile_data.full_name,
@@ -156,33 +198,28 @@ def _store_profile(db: Session, profile_data):
         db.add(profile)
         db.flush()
     else:
-        # Update existing profile
         profile.full_name = profile_data.full_name
         profile.current_title = profile_data.current_title
         profile.current_company = profile_data.current_company
         profile.location_state = profile_data.location_state
-    
-    # Store education
+
     for edu_data in profile_data.education:
         existing_edu = db.query(Education).filter(
             Education.profile_id == profile.id,
             Education.institution == edu_data.institution,
             Education.graduation_year == edu_data.graduation_year
         ).first()
-        
         if not existing_edu:
-            edu = Education(
+            db.add(Education(
                 profile_id=profile.id,
                 institution=edu_data.institution,
                 graduation_year=edu_data.graduation_year,
                 degree_type=edu_data.degree_type,
-            )
-            db.add(edu)
-    
-    # Store work history snapshot
+            ))
+
     snapshot_date = datetime.now()
     for work_data in profile_data.work_history:
-        work = WorkHistory(
+        db.add(WorkHistory(
             profile_id=profile.id,
             title=work_data.title,
             company=work_data.company,
@@ -190,8 +227,5 @@ def _store_profile(db: Session, profile_data):
             end_date=work_data.end_date,
             is_current=work_data.is_current,
             snapshot_date=snapshot_date,
-        )
-        db.add(work)
-    
-    db.commit()
+        ))
 

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.auth import verify_credentials
 from app.models import TrackingMetadata
-from app.schemas.config import ConfigResponse, CompanyListRequest, StateListRequest
+from app.schemas.config import ConfigResponse, CompanyListRequest, StateListRequest, SearchFiltersUpdate
 
 
 router = APIRouter()
@@ -32,6 +32,7 @@ async def get_config(
         return ConfigResponse(
             target_companies=[],
             target_states=[],
+            search_filters={},
             last_ingestion=None,
             last_detection=None,
         )
@@ -39,6 +40,7 @@ async def get_config(
     return ConfigResponse(
         target_companies=config.target_companies or [],
         target_states=config.target_states or [],
+        search_filters=config.search_filters or {},
         last_ingestion=config.last_ingestion,
         last_detection=config.last_detection,
     )
@@ -123,5 +125,56 @@ async def set_states(
         "message": "States updated",
         "states": [s.upper() for s in request.states],
         "count": len(request.states),
+    }
+
+
+@router.patch("/search-filters")
+async def update_search_filters(
+    request: SearchFiltersUpdate,
+    db: Session = Depends(get_db),
+    username: str = Depends(verify_credentials),
+):
+    """
+    Update Apollo search filters.
+    
+    Args:
+        request: Search filters update request
+        db: Database session
+        username: Authenticated username
+        
+    Returns:
+        Updated configuration
+    """
+    config = db.query(TrackingMetadata).first()
+    
+    if not config:
+        config = TrackingMetadata(
+            target_companies=[],
+            target_states=[],
+            search_filters={},
+        )
+        db.add(config)
+        db.flush()
+    
+    # Build search filters dict from request (only include non-None values)
+    filters = {}
+    if request.person_titles is not None:
+        filters["person_titles"] = request.person_titles
+    if request.organization_locations is not None:
+        filters["organization_locations"] = request.organization_locations
+    if request.organization_num_employees is not None:
+        filters["organization_num_employees"] = request.organization_num_employees
+    if request.seniority is not None:
+        filters["seniority"] = request.seniority
+    if request.per_page is not None:
+        filters["per_page"] = request.per_page
+    
+    config.search_filters = filters
+    db.commit()
+    db.refresh(config)
+    
+    return {
+        "message": "Search filters updated",
+        "search_filters": filters,
     }
 

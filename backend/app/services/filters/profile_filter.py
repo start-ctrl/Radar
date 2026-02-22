@@ -81,15 +81,17 @@ class ProfileFilter:
         """
         Check if profile matches location filter.
         
+        When location is missing (People API Search may not return it), allow through
+        since we already filter by person_locations in the Apollo query.
+        
         Args:
             profile: Profile to check
             
         Returns:
-            True if location state is in target states
+            True if location state is in target states, or location unknown
         """
         if not profile.location_state:
-            return False
-        
+            return True  # Apollo query already filtered by location
         return profile.location_state.upper().strip() in self.target_states
     
     def _matches_experience(self, profile: ProfileData) -> bool:
@@ -122,13 +124,15 @@ class ProfileFilter:
             if graduation_years:
                 graduation_year = min(graduation_years)
         
+        # When education/graduation is missing (e.g. People API Search may not return it),
+        # allow profile through so we can still display results
         if graduation_year is None:
-            return False  # Cannot determine experience without graduation year
-        
+            return True
+
         # Calculate experience
         current_year = datetime.now().year
         experience_years = current_year - graduation_year
-        
+
         return experience_years >= self.min_experience_years
     
     @staticmethod

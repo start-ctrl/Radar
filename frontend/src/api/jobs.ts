@@ -7,8 +7,16 @@ export interface DetectionResult {
   notifications_sent: number;
 }
 
+export interface IngestionResult {
+  message: string;
+  total_fetched: number;
+  filtered: number;
+  stored: number;
+}
+
 export const jobsApi = {
   runDetection: () => api.post<DetectionResult>('/api/jobs/run-detection'),
-  triggerIngestion: () => api.post('/api/profiles/ingest'),
+  triggerIngestion: (clearFirst = false) =>
+    api.post<IngestionResult>(`/api/profiles/ingest?clear_first=${clearFirst}`),
 };
 

@@ -53,17 +53,21 @@ export function StatsOverview() {
     setLoading(null);
   };
 
-  const handleTriggerIngestion = async () => {
+  const handleTriggerIngestion = async (clearFirst = false) => {
     setLoading('ingestion');
-    setMessage({ type: 'info', text: 'Fetching latest profiles...' });
-    
-    const result = await jobsApi.triggerIngestion();
+    setMessage({
+      type: 'info',
+      text: clearFirst ? 'Clearing old data and fetching from Apollo...' : 'Fetching latest profiles...',
+    });
+
+    const result = await jobsApi.triggerIngestion(clearFirst);
     if (result.data) {
       setMessage({
         type: 'success',
         text: `Done! Fetched ${result.data.total_fetched} profiles, ${result.data.stored} matched your criteria.`,
       });
       loadStats();
+      window.dispatchEvent(new CustomEvent('profiles-ingested'));
     } else {
       setMessage({ type: 'error', text: result.error || 'Ingestion failed' });
     }
@@ -97,7 +101,7 @@ export function StatsOverview() {
       )}
 
       {/* Stats and Actions Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         {/* Total Signals */}
         <div className="stat-card">
           <p className="stat-label">Total Signals</p>
@@ -136,7 +140,7 @@ export function StatsOverview() {
 
         {/* Sync Button */}
         <button
-          onClick={handleTriggerIngestion}
+          onClick={() => handleTriggerIngestion(false)}
           disabled={loading !== null}
           className="btn btn-secondary h-full flex flex-col items-center justify-center gap-2 py-4"
         >
@@ -154,6 +158,30 @@ export function StatsOverview() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
               <span className="text-sm">Sync Data</span>
+            </>
+          )}
+        </button>
+
+        {/* Clear & Sync - replaces mock/old data with fresh Apollo data */}
+        <button
+          onClick={() => handleTriggerIngestion(true)}
+          disabled={loading !== null}
+          className="btn btn-primary h-full flex flex-col items-center justify-center gap-2 py-4"
+        >
+          {loading === 'ingestion' ? (
+            <>
+              <svg className="w-5 h-5 spinner" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <span className="text-sm">Syncing...</span>
+            </>
+          ) : (
+            <>
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <span className="text-sm">Clear & Sync</span>
             </>
           )}
         </button>
