@@ -20,7 +20,8 @@ source .env
 
 required_vars=("APOLLO_API_KEY" "RESEND_API_KEY" "BASIC_AUTH_PASSWORD")
 for var in "${required_vars[@]}"; do
-    if [ -z "${!var}" ] || [ "${!var}" = "your_${var,,}_here" ] || [ "${!var}" = "your_secure_password_here" ]; then
+    val="${!var}"
+    if [ -z "$val" ] || [ "$val" = "your_apollo_api_key_here" ] || [ "$val" = "your_resend_api_key_here" ] || [ "$val" = "your_secure_password_here" ]; then
         echo "❌ Please set $var in .env file"
         exit 1
     fi
