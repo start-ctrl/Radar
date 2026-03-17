@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     ENABLE_SCHEDULER: bool = True
     INGESTION_CRON: str = "0 2 * * *"  # Daily at 2 AM
     DETECTION_CRON: str = "0 3 * * *"  # Daily at 3 AM
+
+    # CORS - comma-separated origins for production (e.g. https://your-app.vercel.app)
+    CORS_ORIGINS: str = ""
     
     class Config:
         env_file = str(BASE_DIR / ".env")
