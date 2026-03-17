@@ -11,8 +11,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
-    # Database
+    # Database (postgres:// from some hosts → postgresql:// for SQLAlchemy)
     DATABASE_URL: str = "sqlite:///./founder_tracker.db"
+
+    @property
+    def database_url(self) -> str:
+        url = self.DATABASE_URL
+        if url.startswith("postgres://"):
+            return "postgresql://" + url[10:]
+        return url
     
     # API Keys
     APOLLO_API_KEY: Optional[str] = None

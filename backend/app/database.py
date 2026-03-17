@@ -6,9 +6,10 @@ from app.config import settings
 
 
 # Create database engine
+_db_url = settings.database_url
 engine = create_engine(
-    settings.DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
+    _db_url,
+    connect_args={"check_same_thread": False} if "sqlite" in _db_url else {},
     echo=False,  # Set to True for SQL query logging
 )
 
