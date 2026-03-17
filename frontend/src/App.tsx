@@ -3,11 +3,18 @@ import { ConfigPanel } from './components/ConfigPanel';
 import { TransitionsTable } from './components/TransitionsTable';
 import { ProfilesTable } from './components/ProfilesTable';
 import { StatsOverview } from './components/StatsOverview';
+import { Login } from './components/Login';
+import { useAuth } from './contexts/AuthContext';
 
 type Tab = 'signals' | 'companies' | 'locations' | 'filters' | 'notifications';
 
 function App() {
+  const { isLoggedIn, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<Tab>('signals');
+
+  if (!isLoggedIn) {
+    return <Login />;
+  }
 
   return (
     <div className="min-h-screen flex">
@@ -91,8 +98,8 @@ function App() {
           </button>
         </nav>
 
-        {/* Status */}
-        <div className="p-4 border-t border-[var(--border-color)]">
+        {/* Status & Logout */}
+        <div className="p-4 border-t border-[var(--border-color)] space-y-2">
           <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--accent-green)] opacity-75"></span>
@@ -100,6 +107,12 @@ function App() {
             </span>
             System Online
           </div>
+          <button
+            onClick={logout}
+            className="w-full text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] py-1.5"
+          >
+            Sign out
+          </button>
         </div>
       </aside>
 

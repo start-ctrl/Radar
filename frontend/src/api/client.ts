@@ -2,8 +2,12 @@
 // Use relative URL in dev (Vite proxies /api to backend); override with VITE_API_URL for production
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
-// Basic auth credentials (in production, use proper auth flow)
+const AUTH_KEY = 'radar_auth';
+
+// Basic auth: use sessionStorage (from login) or env vars
 const getAuthHeader = (): string => {
+  const stored = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(AUTH_KEY) : null;
+  if (stored) return `Basic ${stored}`;
   const username = import.meta.env.VITE_AUTH_USERNAME || 'admin';
   const password = import.meta.env.VITE_AUTH_PASSWORD || 'changeme';
   return `Basic ${btoa(`${username}:${password}`)}`;
