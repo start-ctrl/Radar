@@ -32,7 +32,18 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Fetch Vercel Org ID from token
+        id: vercel_ids
+        run: |
+          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" https://api.vercel.com/v2/user)
+          USER_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('user',{}).get('id',''))")
+          TEAM_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" "https://api.vercel.com/v2/projects/${{ secrets.VERCEL_PROJECT_ID }}")
+          TEAM_ID=$(echo "$TEAM_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('accountId',''))" 2>/dev/null || echo "")
+          ORG_ID="${TEAM_ID:-$USER_ID}"
+          echo "org_id=$ORG_ID" >> $GITHUB_OUTPUT
+
       - name: Deploy to Vercel (Production)
         run: vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
         env:
+          VERCEL_ORG_ID: ${{ steps.vercel_ids.outputs.org_id }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
