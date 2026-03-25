@@ -104,7 +104,7 @@ async def trigger_ingestion(
     """
     Manually trigger profile ingestion.
     
-    Fetches profiles from external API (Apollo) based on configured companies and states.
+    Fetches profiles from external API (Apollo) based on configured companies, optional state list, and search filters.
     
     Args:
         clear_first: If True, clears all existing profiles before syncing (use to replace mock data)
@@ -133,10 +133,10 @@ async def trigger_ingestion(
     target_states = config.target_states or []
     search_filters = config.search_filters or {}
     
-    if not target_companies or not target_states:
+    if not target_companies:
         raise HTTPException(
             status_code=400,
-            detail="Target companies or states not configured."
+            detail="Target companies not configured. Add at least one company in Settings."
         )
     
     # Initialize provider and filter

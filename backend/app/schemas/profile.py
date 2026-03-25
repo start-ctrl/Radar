@@ -59,7 +59,7 @@ class ProfileListResponse(BaseModel):
 
 class EnrichProfilesRequest(BaseModel):
     """Request schema for enriching selected profiles."""
-    profile_ids: List[str] = Field(..., min_length=1, max_length=10)
+    profile_ids: List[str] = Field(..., min_length=1, max_length=500)
     # UI-selected fields to return in response
     fields: List[str] = Field(default_factory=lambda: ["name", "title", "linkedin_url"])
     # auto: 1 => people enrichment, >1 => bulk enrichment

@@ -22,6 +22,9 @@ US_STATE_CODE_TO_NAME = {
     "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming", "DC": "District of Columbia",
 }
 
+# All US states + DC as Apollo expects: "State Name, US"
+US_ALL_PERSON_LOCATIONS = [f"{name}, US" for name in US_STATE_CODE_TO_NAME.values()]
+
 
 class ApolloProvider(PeopleDataProvider):
     """
@@ -61,6 +64,7 @@ class ApolloProvider(PeopleDataProvider):
                 - organization_locations: List of org locations (optional)
                 - organization_num_employees: Employee count filter (optional)
                 - seniority: List of seniority levels (optional)
+                - min_years_experience / max_years_experience: Total years of experience range (optional)
                 - per_page: Results per page (default 100, max 100)
             
         Returns:
@@ -76,19 +80,20 @@ class ApolloProvider(PeopleDataProvider):
             "per_page": per_page,
         }
         
-        # Add person_locations for ALL states (Apollo expects "State Name, US" per docs)
+        # person_locations: selected states, or all US when none selected (default)
+        locations: List[str] = []
         if "states" in filters and filters["states"]:
-            locations = []
             for state in filters["states"]:
                 code = (state or "").strip().upper()
                 if not code:
                     continue
-                # Use full state name if we have it, else pass through (user may have entered "California")
                 name = US_STATE_CODE_TO_NAME.get(code, code if len(code) > 2 else None)
                 if name:
                     locations.append(f"{name}, US")
-            if locations:
-                body["person_locations"] = locations
+        if locations:
+            body["person_locations"] = locations
+        else:
+            body["person_locations"] = list(US_ALL_PERSON_LOCATIONS)
         
         # Add optional search filters
         if "person_titles" in filters and filters["person_titles"]:
@@ -102,6 +107,15 @@ class ApolloProvider(PeopleDataProvider):
         
         if "seniority" in filters and filters["seniority"]:
             body["person_seniorities"] = filters["seniority"]
+
+        min_yoe = filters.get("min_years_experience")
+        max_yoe = filters.get("max_years_experience")
+        if min_yoe is not None or max_yoe is not None:
+            lo = int(float(min_yoe)) if min_yoe is not None else 0
+            hi = int(float(max_yoe)) if max_yoe is not None else 80
+            if lo > hi:
+                lo, hi = hi, lo
+            body["person_total_yoe_ranges"] = [f"{lo},{hi}"]
         
         # Headers with API key (Apollo requires X-Api-Key header)
         headers = {
@@ -231,42 +245,50 @@ class ApolloProvider(PeopleDataProvider):
         reveal_personal_emails: bool = False,
     ) -> Dict[str, Any]:
         """
-        Bulk enrich up to 10 people via Apollo Bulk People Enrichment API.
-        Consumes credits. Use Apollo IDs for best match rate.
+        Bulk enrich via Apollo Bulk People Enrichment API (max 10 people per HTTP call).
+        Larger selections are processed in sequential chunks. Consumes credits.
 
         Args:
-            apollo_ids: List of Apollo person IDs (max 10)
+            apollo_ids: List of Apollo person IDs
             reveal_personal_emails: If True, request emails (consumes credits)
 
         Returns:
-            Raw API response with matches, credits_consumed, etc.
+            Merged API-style dict with matches, credits_consumed, etc.
         """
-        ids = apollo_ids[:10]  # Max 10 per call
-        details = [{"id": aid} for aid in ids]
-
-        body = {"details": details}
         params = {"reveal_personal_emails": str(reveal_personal_emails).lower()}
-
         headers = {
             "Content-Type": "application/json",
             "X-Api-Key": self.api_key,
             "Cache-Control": "no-cache",
         }
+        all_matches: List[Dict[str, Any]] = []
+        credits_total: Optional[float] = None
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{self.BASE_URL}/people/bulk_match",
-                json=body,
-                params=params,
-                headers=headers,
-            )
-            if response.status_code == 401:
-                raise ValueError("Invalid or expired Apollo API key.")
-            if response.status_code == 403:
-                err = response.json() if "application/json" in response.headers.get("content-type", "") else {}
-                raise ValueError(err.get("error", response.text))
-            response.raise_for_status()
-            return response.json()
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            for i in range(0, len(apollo_ids), 10):
+                chunk = apollo_ids[i : i + 10]
+                details = [{"id": aid} for aid in chunk]
+                body = {"details": details}
+                response = await client.post(
+                    f"{self.BASE_URL}/people/bulk_match",
+                    json=body,
+                    params=params,
+                    headers=headers,
+                )
+                if response.status_code == 401:
+                    raise ValueError("Invalid or expired Apollo API key.")
+                if response.status_code == 403:
+                    err = response.json() if "application/json" in response.headers.get("content-type", "") else {}
+                    raise ValueError(err.get("error", response.text))
+                response.raise_for_status()
+                data = response.json()
+                matches = data.get("matches") or []
+                all_matches.extend(matches)
+                c = data.get("credits_consumed")
+                if c is not None:
+                    credits_total = (credits_total or 0) + float(c)
+
+        return {"matches": all_matches, "credits_consumed": credits_total}
 
     async def bulk_refresh(self, profile_ids: List[str]) -> List[ProfileData]:
         """

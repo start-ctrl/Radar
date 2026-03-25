@@ -2,11 +2,13 @@
 import { api } from './client';
 
 export interface SearchFilters {
-  person_titles?: string[];
-  organization_locations?: string[];
+  person_titles?: string[] | null;
+  organization_locations?: string[] | null;
   organization_num_employees?: any;
-  seniority?: string[];
-  per_page?: number;
+  seniority?: string[] | null;
+  min_years_experience?: number | null;
+  max_years_experience?: number | null;
+  per_page?: number | null;
 }
 
 export interface Config {

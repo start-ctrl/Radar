@@ -10,6 +10,8 @@ class SearchFilters(BaseModel):
     organization_locations: Optional[List[str]] = Field(None, description="Organization HQ locations")
     organization_num_employees: Optional[Any] = Field(None, description="Company size filter")
     seniority: Optional[List[str]] = Field(None, description="Seniority levels")
+    min_years_experience: Optional[int] = Field(None, ge=0, le=80, description="Min total years of work experience")
+    max_years_experience: Optional[int] = Field(None, ge=0, le=80, description="Max total years of work experience")
     per_page: Optional[int] = Field(100, ge=1, le=100, description="Results per page (1-100)")
 
 
@@ -29,7 +31,7 @@ class CompanyListRequest(BaseModel):
 
 class StateListRequest(BaseModel):
     """Request schema for setting state list."""
-    states: List[str] = Field(..., min_length=1, description="List of US state codes (e.g., CA, NY)")
+    states: List[str] = Field(default_factory=list, description="US state codes (e.g., CA, NY); empty = all US")
 
 
 class SearchFiltersUpdate(BaseModel):
@@ -38,5 +40,7 @@ class SearchFiltersUpdate(BaseModel):
     organization_locations: Optional[List[str]] = Field(None, description="Organization HQ locations")
     organization_num_employees: Optional[Any] = Field(None, description="Company size filter")
     seniority: Optional[List[str]] = Field(None, description="Seniority levels")
+    min_years_experience: Optional[int] = Field(None, ge=0, le=80, description="Min total years of work experience")
+    max_years_experience: Optional[int] = Field(None, ge=0, le=80, description="Max total years of work experience")
     per_page: Optional[int] = Field(None, ge=1, le=100, description="Results per page (1-100)")
 

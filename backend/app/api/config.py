@@ -100,31 +100,31 @@ async def set_states(
     Returns:
         Success message
     """
-    # Validate state codes (basic validation - 2 uppercase letters)
-    for state in request.states:
+    normalized = [s.upper().strip() for s in request.states if s and str(s).strip()]
+    for state in normalized:
         if len(state) != 2 or not state.isalpha():
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid state code: {state}. Must be 2-letter US state code (e.g., CA, NY)."
             )
-    
+
     config = db.query(TrackingMetadata).first()
-    
+
     if not config:
         config = TrackingMetadata(
             target_companies=[],
-            target_states=[s.upper() for s in request.states],
+            target_states=normalized,
         )
         db.add(config)
     else:
-        config.target_states = [s.upper() for s in request.states]
-    
+        config.target_states = normalized
+
     db.commit()
-    
+
     return {
         "message": "States updated",
-        "states": [s.upper() for s in request.states],
-        "count": len(request.states),
+        "states": normalized,
+        "count": len(normalized),
     }
 
 
@@ -156,19 +156,14 @@ async def update_search_filters(
         db.add(config)
         db.flush()
     
-    # Build search filters dict from request (only include non-None values)
-    filters = {}
-    if request.person_titles is not None:
-        filters["person_titles"] = request.person_titles
-    if request.organization_locations is not None:
-        filters["organization_locations"] = request.organization_locations
-    if request.organization_num_employees is not None:
-        filters["organization_num_employees"] = request.organization_num_employees
-    if request.seniority is not None:
-        filters["seniority"] = request.seniority
-    if request.per_page is not None:
-        filters["per_page"] = request.per_page
-    
+    filters = dict(config.search_filters or {})
+    update = request.model_dump(exclude_unset=True)
+    for key, value in update.items():
+        if value is None:
+            filters.pop(key, None)
+        else:
+            filters[key] = value
+
     config.search_filters = filters
     db.commit()
     db.refresh(config)

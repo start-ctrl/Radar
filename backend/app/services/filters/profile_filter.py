@@ -10,7 +10,7 @@ class ProfileFilter:
     
     Filters:
     - Company: Must be current or former employee of target companies
-    - Location: Must be in target US states
+    - Location: Must be in target US states when states are configured; empty states means all US
     - Experience: Must have >= 7 years experience (inferred from undergrad graduation)
     """
     
@@ -29,7 +29,7 @@ class ProfileFilter:
             min_experience_years: Minimum years of experience (default: 7)
         """
         self.target_companies = {c.lower().strip() for c in target_companies}
-        self.target_states = {s.upper().strip() for s in target_states}
+        self.target_states = {s.upper().strip() for s in target_states if s and str(s).strip()}
         self.min_experience_years = min_experience_years
     
     def filter(self, profiles: List[ProfileData]) -> List[ProfileData]:
@@ -90,6 +90,8 @@ class ProfileFilter:
         Returns:
             True if location state is in target states, or location unknown
         """
+        if not self.target_states:
+            return True  # No state filter = all US (Apollo query scopes to US)
         if not profile.location_state:
             return True  # Apollo query already filtered by location
         return profile.location_state.upper().strip() in self.target_states

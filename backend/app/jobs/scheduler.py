@@ -64,8 +64,8 @@ async def run_ingestion_job():
         target_states = config.target_states or []
         search_filters = config.search_filters or {}
         
-        if not target_companies or not target_states:
-            print("Target companies or states not configured. Skipping ingestion.")
+        if not target_companies:
+            print("Target companies not configured. Skipping ingestion.")
             return
         
         # Initialize provider and filter

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { configApi, type Config, type SearchFilters } from '../api/config';
+import { jobsApi } from '../api/jobs';
 
 interface ConfigPanelProps {
   section: 'companies' | 'locations' | 'filters' | 'notifications';
@@ -12,7 +13,9 @@ export function ConfigPanel({ section }: ConfigPanelProps) {
   const [personTitles, setPersonTitles] = useState<string>('');
   const [orgLocations, setOrgLocations] = useState<string>('');
   const [perPage, setPerPage] = useState<number>(100);
-  const [loading, setLoading] = useState<'companies' | 'states' | 'filters' | null>(null);
+  const [minYearsExp, setMinYearsExp] = useState<string>('');
+  const [maxYearsExp, setMaxYearsExp] = useState<string>('');
+  const [loading, setLoading] = useState<'companies' | 'states' | 'filters' | 'reimport' | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
@@ -31,13 +34,19 @@ export function ConfigPanel({ section }: ConfigPanelProps) {
     if (result.data) {
       setConfig(result.data);
       setCompanies(result.data.target_companies.join('\n'));
-      setStates(result.data.target_states.join(', '));
+      setStates((result.data.target_states || []).join(', '));
       
       // Load search filters
       const filters = result.data.search_filters || {};
       setPersonTitles((filters.person_titles || []).join('\n'));
       setOrgLocations((filters.organization_locations || []).join('\n'));
-      setPerPage(filters.per_page || 100);
+      setPerPage(filters.per_page ?? 100);
+      setMinYearsExp(
+        filters.min_years_experience != null ? String(filters.min_years_experience) : ''
+      );
+      setMaxYearsExp(
+        filters.max_years_experience != null ? String(filters.max_years_experience) : ''
+      );
     } else {
       setMessage({ type: 'error', text: result.error || 'Failed to load config' });
     }
@@ -65,7 +74,13 @@ export function ConfigPanel({ section }: ConfigPanelProps) {
     if (result.error) {
       setMessage({ type: 'error', text: result.error });
     } else {
-      setMessage({ type: 'success', text: `Successfully saved ${stateList.length} states` });
+      setMessage({
+        type: 'success',
+        text:
+          stateList.length === 0
+            ? 'Saved: searching all US locations (no state filter)'
+            : `Successfully saved ${stateList.length} states`,
+      });
       loadConfig();
     }
     setLoading(null);
@@ -74,21 +89,73 @@ export function ConfigPanel({ section }: ConfigPanelProps) {
   const handleSaveFilters = async () => {
     setLoading('filters');
     setMessage(null);
-    
+
     const titlesList = personTitles.split('\n').filter(t => t.trim()).map(t => t.trim());
     const locationsList = orgLocations.split('\n').filter(l => l.trim()).map(l => l.trim());
-    
-    const filters: SearchFilters = {};
-    if (titlesList.length > 0) filters.person_titles = titlesList;
-    if (locationsList.length > 0) filters.organization_locations = locationsList;
-    if (perPage !== 100) filters.per_page = perPage;
-    
+    const minTrim = minYearsExp.trim();
+    const maxTrim = maxYearsExp.trim();
+    let minNum: number | null = null;
+    let maxNum: number | null = null;
+    if (minTrim !== '') {
+      minNum = parseInt(minTrim, 10);
+      if (Number.isNaN(minNum) || minNum < 0) {
+        setMessage({ type: 'error', text: 'Min years of experience must be a number ≥ 0' });
+        setLoading(null);
+        return;
+      }
+    }
+    if (maxTrim !== '') {
+      maxNum = parseInt(maxTrim, 10);
+      if (Number.isNaN(maxNum) || maxNum < 0) {
+        setMessage({ type: 'error', text: 'Max years of experience must be a number ≥ 0' });
+        setLoading(null);
+        return;
+      }
+    }
+    if (minNum !== null && maxNum !== null && minNum > maxNum) {
+      setMessage({ type: 'error', text: 'Min years cannot be greater than max years' });
+      setLoading(null);
+      return;
+    }
+
+    const filters: SearchFilters = {
+      person_titles: titlesList.length > 0 ? titlesList : null,
+      organization_locations: locationsList.length > 0 ? locationsList : null,
+      per_page: perPage,
+      min_years_experience: minNum,
+      max_years_experience: maxNum,
+    };
+
     const result = await configApi.updateSearchFilters(filters);
     if (result.error) {
       setMessage({ type: 'error', text: result.error });
     } else {
       setMessage({ type: 'success', text: 'Search filters updated successfully' });
       loadConfig();
+    }
+    setLoading(null);
+  };
+
+  const handleClearAndReimport = async () => {
+    if (
+      !window.confirm(
+        'This deletes all tracked profiles and related data, then re-imports from Apollo using your current settings. Continue?'
+      )
+    ) {
+      return;
+    }
+    setLoading('reimport');
+    setMessage(null);
+    const result = await jobsApi.triggerIngestion(true);
+    if (result.data) {
+      setMessage({
+        type: 'success',
+        text: `Re-import complete: fetched ${result.data.total_fetched} profiles, ${result.data.stored} matched your criteria.`,
+      });
+      loadConfig();
+      window.dispatchEvent(new CustomEvent('profiles-ingested'));
+    } else {
+      setMessage({ type: 'error', text: result.error || 'Re-import failed' });
     }
     setLoading(null);
   };
@@ -167,7 +234,9 @@ export function ConfigPanel({ section }: ConfigPanelProps) {
       <div>
         <div className="section-header">
           <h1 className="section-title text-xl">Target Locations</h1>
-          <p className="section-description">Specify US states to filter professionals by location</p>
+          <p className="section-description">
+            Optionally narrow by US state. Leave empty to include the entire United States.
+          </p>
         </div>
 
         {message && (
@@ -195,7 +264,7 @@ export function ConfigPanel({ section }: ConfigPanelProps) {
               placeholder="CA, NY, TX, WA, MA"
             />
             <p className="form-hint">
-              Enter 2-letter US state codes separated by commas. Example: CA, NY, TX
+              Enter 2-letter US state codes separated by commas (e.g. CA, NY). Leave blank to search all US states.
             </p>
           </div>
 
@@ -229,7 +298,9 @@ export function ConfigPanel({ section }: ConfigPanelProps) {
 
           <div className="flex items-center justify-between pt-6 mt-6 border-t border-[var(--border-subtle)]">
             <span className="text-sm text-[var(--text-muted)]">
-              {states.split(',').filter(s => s.trim()).length} states selected
+              {states.split(',').filter(s => s.trim()).length === 0
+                ? 'All US (no state filter)'
+                : `${states.split(',').filter(s => s.trim()).length} states selected`}
             </span>
             <button
               onClick={handleSaveStates}
@@ -315,6 +386,40 @@ export function ConfigPanel({ section }: ConfigPanelProps) {
             </div>
           </div>
 
+          {/* Years of experience (Apollo total YOE) */}
+          <div className="card p-6">
+            <div className="form-group">
+              <label className="form-label">Years of Work Experience (Optional)</label>
+              <div className="flex flex-wrap gap-4 items-end">
+                <div className="flex-1 min-w-[8rem]">
+                  <label className="text-xs text-[var(--text-muted)] block mb-1">Minimum</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={80}
+                    value={minYearsExp}
+                    onChange={(e) => setMinYearsExp(e.target.value)}
+                    placeholder="Any"
+                  />
+                </div>
+                <div className="flex-1 min-w-[8rem]">
+                  <label className="text-xs text-[var(--text-muted)] block mb-1">Maximum</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={80}
+                    value={maxYearsExp}
+                    onChange={(e) => setMaxYearsExp(e.target.value)}
+                    placeholder="Any"
+                  />
+                </div>
+              </div>
+              <p className="form-hint mt-2">
+                Maps to Apollo total years of experience. Leave both empty for no experience filter.
+              </p>
+            </div>
+          </div>
+
           {/* Results Per Page */}
           <div className="card p-6">
             <div className="form-group">
@@ -378,6 +483,21 @@ export function ConfigPanel({ section }: ConfigPanelProps) {
           <p className="section-description">Configure how and when you receive founder alerts</p>
         </div>
 
+        {message && (
+          <div className={`alert mb-6 ${message.type === 'success' ? 'alert-success' : 'alert-error'}`}>
+            {message.type === 'success' ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            )}
+            <span>{message.text}</span>
+          </div>
+        )}
+
         <div className="card p-6 mb-6">
           <h3 className="text-sm font-medium text-[var(--text-primary)] mb-4">Email Notifications</h3>
           
@@ -439,6 +559,35 @@ export function ConfigPanel({ section }: ConfigPanelProps) {
                 }
               </p>
             </div>
+          </div>
+
+          <div className="mt-6 pt-6 border-t border-[var(--border-subtle)]">
+            <p className="text-xs text-[var(--text-muted)] mb-3">
+              Clear all stored profiles and fetch fresh results from Apollo (uses your current companies, locations, and filters).
+            </p>
+            <button
+              type="button"
+              onClick={handleClearAndReimport}
+              disabled={loading !== null}
+              className="btn btn-secondary text-sm"
+            >
+              {loading === 'reimport' ? (
+                <>
+                  <svg className="w-4 h-4 spinner" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Re-importing...
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Clear database &amp; re-import from Apollo
+                </>
+              )}
+            </button>
           </div>
         </div>
       </div>
